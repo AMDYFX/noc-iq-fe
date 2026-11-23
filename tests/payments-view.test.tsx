@@ -55,6 +55,29 @@ describe('payment normalization', () => {
     expect(payment.clientWallet).toBe('GCLIENT');
     expect(payment.artistWallet).toBe('GARTIST');
   });
+
+  it('normalizes idempotency metadata and failure taxonomy fields', () => {
+    const uniquePayment = normalizePayment({
+      id: 'pay_unique',
+      idempotency_key: 'sla-penalty-001',
+      failure_reason: 'Insufficient Balance',
+    });
+    const duplicatePayment = normalizePayment({
+      id: 'pay_duplicate',
+      idempotencyKey: 'sla-penalty-002',
+      metadata: { duplicate_prevented: true },
+    });
+
+    expect(uniquePayment).toMatchObject({
+      idempotencyKey: 'sla-penalty-001',
+      idempotencyStatus: 'unique',
+      failureReason: 'Insufficient Balance',
+    });
+    expect(duplicatePayment).toMatchObject({
+      idempotencyKey: 'sla-penalty-002',
+      idempotencyStatus: 'duplicate_prevented',
+    });
+  });
 });
 
 describe('date validation logic', () => {

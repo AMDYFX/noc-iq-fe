@@ -13,12 +13,22 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { useToast } from '@/components/ui/toast';
 import { useUrlSync } from '@/hooks/useUrlSync';
 import { useAutoRefresh } from '@/hooks/useAutoRefresh';
-import { deleteOutage, resolveOutage } from '@/services/outages';
+import { deleteOutage, getOutages, resolveOutage } from '@/services/outages';
 import { RowActions } from '@/components/tables/RowActions';
 import { SeverityBadge } from '@/components/shared/SeverityBadgeAndShortcuts';
 import SeverityLegend from '@/components/outages/SeverityLegend';
 import { TableStatusPill } from '@/components/outages/TableStatusPill';
-import { useAutoRefresh } from '@/hooks/useAutoRefresh';
+import SlaStatusBadge from '@/components/outages/SlaStatusBadge';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { useSession } from '@/hooks/useSession';
+import { useQuery } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/queryKeys';
+import { formatRelativeTime, formatTimestamp } from '@/lib/time';
 import type {
   Outage as OutageRecord,
   OutageStatus,
@@ -32,6 +42,7 @@ type Outage = {
   severity: Severity;
   status: OutageStatus;
   createdAt: string;
+  assigned_to?: string;
   sla_status?: SLAResult;
 };
 
@@ -54,6 +65,7 @@ function toOutageRecord(row: Outage): OutageRecord {
     detected_at: row.createdAt,
     description: '',
     affected_services: [],
+    assigned_to: row.assigned_to,
     sla_status: row.sla_status,
   };
 }
@@ -75,21 +87,53 @@ type Props = {
 
 // Stable identity — a `data = []` default would be a new array each render and
 // would retrigger the sync effect below forever.
-const EMPTY_OUTAGES: Outage[] = [];
 const FILTER_DEFAULTS = {
   search: '',
   severity: '',
   date_from: '',
   date_to: '',
   sort: 'date',
+  assigned_to_me: '',
 };
 
-export default function OutagesPageClient({
-  data = EMPTY_OUTAGES,
-  onRefresh,
-}: Props) {
+async function fetchOutageQueue() {
+  const pageSize = 100;
+  const firstPage = await getOutages({ page: 1, page_size: pageSize });
+  const pageCount = Math.ceil(firstPage.total / pageSize);
+  if (pageCount <= 1) return firstPage.items;
+
+  const remainingPages = await Promise.all(
+    Array.from({ length: pageCount - 1 }, (_, index) =>
+      getOutages({ page: index + 2, page_size: pageSize })
+    )
+  );
+  return [...firstPage.items, ...remainingPages.flatMap((page) => page.items)];
+}
+
+export default function OutagesPageClient({ data, onRefresh }: Props) {
   const toast = useToast();
   const router = useRouter();
+  const { user } = useSession();
+  const {
+    data: outageResponse,
+    isLoading: isOutagesLoading,
+    error: outagesError,
+  } = useQuery({
+    queryKey: queryKeys.outages.list({ scope: 'queue' }),
+    queryFn: fetchOutageQueue,
+    enabled: data === undefined,
+  });
+  const outageRows =
+    data ??
+    (outageResponse ?? []).map((outage) => ({
+      id: outage.id,
+      title: outage.site_name,
+      severity: outage.severity,
+      status: outage.status,
+      createdAt: outage.detected_at,
+      assigned_to: outage.assigned_to,
+      sla_status: outage.sla_status,
+    }));
 
   // -----------------------------
   // State
@@ -101,6 +145,7 @@ export default function OutagesPageClient({
     date_from: dateFrom,
     date_to: dateTo,
     sort,
+    assigned_to_me: assignedToMe,
   } = filters;
   const sortBy = sort as 'date' | 'title';
   // A reversed range can never return rows. Keep it client-side so no query is
@@ -112,8 +157,8 @@ export default function OutagesPageClient({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [removedIds, setRemovedIds] = useState<string[]>([]);
   const rows = useMemo(
-    () => data.filter((item) => !removedIds.includes(item.id)),
-    [data, removedIds]
+    () => outageRows.filter((item) => !removedIds.includes(item.id)),
+    [outageRows, removedIds]
   );
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -177,6 +222,12 @@ export default function OutagesPageClient({
       result = result.filter((item) => item.severity === severity);
     }
 
+    if (assignedToMe === 'true') {
+      result = user?.id
+        ? result.filter((item) => item.assigned_to === user.id)
+        : [];
+    }
+
     if (dateFrom) {
       result = result.filter((item) => item.createdAt.slice(0, 10) >= dateFrom);
     }
@@ -198,7 +249,17 @@ export default function OutagesPageClient({
     }
 
     return result;
-  }, [rows, search, severity, dateFrom, dateTo, dateRangeError, sortBy]);
+  }, [
+    rows,
+    search,
+    severity,
+    assignedToMe,
+    user,
+    dateFrom,
+    dateTo,
+    dateRangeError,
+    sortBy,
+  ]);
 
   // -----------------------------
   // Selection State (visible rows)
@@ -212,6 +273,8 @@ export default function OutagesPageClient({
     filteredData.length > 0 && selectedVisibleCount === filteredData.length;
   const someVisibleSelected =
     selectedVisibleCount > 0 && selectedVisibleCount < filteredData.length;
+  const isEmptyDataset =
+    !isOutagesLoading && !outagesError && rows.length === 0;
 
   const selectAllRef = useRef<HTMLInputElement>(null);
 
@@ -382,6 +445,28 @@ export default function OutagesPageClient({
             <option value="high">High</option>
             <option value="critical">Critical</option>
           </select>
+            <button
+              type="button"
+              aria-pressed={assignedToMe === 'true'}
+              disabled={!user?.id}
+              title={
+                !user?.id
+                  ? 'Sign in to filter outages assigned to you.'
+                  : undefined
+              }
+              onClick={() =>
+                setFilters({
+                  assigned_to_me: assignedToMe === 'true' ? '' : 'true',
+                })
+              }
+              className={`rounded-md border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
+                assignedToMe === 'true'
+                  ? 'border-blue-600 bg-blue-50 text-blue-700'
+                  : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              Assigned to Me
+            </button>
           {/* #1001: keyboard-accessible severity legend. */}
           <SeverityLegend />
           <label className="sr-only" htmlFor="outage-date-from">
@@ -394,7 +479,9 @@ export default function OutagesPageClient({
             value={dateFrom}
             onChange={(e) => setFilters({ date_from: e.target.value })}
             aria-invalid={!!dateRangeError}
-            aria-describedby={dateRangeError ? 'outage-date-range-error' : undefined}
+              aria-describedby={
+                dateRangeError ? 'outage-date-range-error' : undefined
+              }
             className={`border rounded-md px-3 py-2 ${dateRangeError ? 'border-red-500' : ''}`}
           />
           <label className="sr-only" htmlFor="outage-date-to">
@@ -407,7 +494,9 @@ export default function OutagesPageClient({
             value={dateTo}
             onChange={(e) => setFilters({ date_to: e.target.value })}
             aria-invalid={!!dateRangeError}
-            aria-describedby={dateRangeError ? 'outage-date-range-error' : undefined}
+              aria-describedby={
+                dateRangeError ? 'outage-date-range-error' : undefined
+              }
             className={`border rounded-md px-3 py-2 ${dateRangeError ? 'border-red-500' : ''}`}
           />
 
@@ -439,6 +528,22 @@ export default function OutagesPageClient({
           </button>
         </div>
       </div>
+
+        {outagesError ? (
+          <p
+            role="alert"
+            className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+          >
+            {outagesError instanceof Error
+              ? outagesError.message
+              : 'Failed to load outages.'}
+          </p>
+        ) : null}
+        {isOutagesLoading ? (
+          <p role="status" className="text-sm text-slate-500">
+            Loading outages…
+          </p>
+        ) : null}
 
       {dateRangeError ? (
         <p
@@ -549,6 +654,8 @@ export default function OutagesPageClient({
               description={
                 search
                   ? "Try adjusting your search query to find what you're looking for."
+                    : assignedToMe === 'true'
+                      ? 'There are no outages assigned to you.'
                   : 'All systems are currently operational.'
               }
               action={
@@ -557,6 +664,11 @@ export default function OutagesPageClient({
                       label: 'Clear Search',
                       onClick: () => setFilters({ search: '' }),
                     }
+                    : assignedToMe === 'true'
+                      ? {
+                          label: 'Clear Assigned Filter',
+                          onClick: () => setFilters({ assigned_to_me: '' }),
+                        }
                   : isEmptyDataset
                     ? {
                         label: 'Log an outage',

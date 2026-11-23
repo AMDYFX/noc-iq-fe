@@ -10,6 +10,10 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => ({ get: () => null, toString: () => '' }),
 }));
 
+vi.mock('@/hooks/useSession', () => ({
+  useSession: () => ({ user: { id: 'operator-1' } }),
+}));
+
 function renderPage() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },

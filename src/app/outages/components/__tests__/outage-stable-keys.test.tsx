@@ -12,6 +12,10 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => ({ get: () => null, toString: () => '' }),
 }));
 
+vi.mock('@/hooks/useSession', () => ({
+  useSession: () => ({ user: { id: 'operator-1' } }),
+}));
+
 type OutageRow = {
   id: string;
   title: string;

@@ -17,13 +17,9 @@ import {
 } from '@/components/ui/route-state';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/components/ui/toast';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { announce } from '@/hooks/useOutageRealtime';
+import { useSession } from '@/hooks/useSession';
 import { formatTimestampWithTimeZone } from '@/lib/time';
 import {
   getSlaAmountTooltip,
@@ -32,6 +28,7 @@ import {
 } from '@/lib/slaStatusTooltip';
 import {
   getOutage,
+  escalateOutage,
   resolveOutage,
   updateOutage,
   deleteOutage,
@@ -43,6 +40,13 @@ import type {
   Severity,
   OutageStatus,
 } from '@/types/outages';
+
+const SEVERITY_ORDER: Severity[] = ['low', 'medium', 'high', 'critical'];
+
+function getHigherSeverities(severity: Severity) {
+  const index = SEVERITY_ORDER.indexOf(severity);
+  return SEVERITY_ORDER.slice(index + 1);
+}
 
 // Loading skeleton for ResolveOutageModal
 function ResolveModalSkeleton() {
@@ -95,6 +99,13 @@ function buildTimeline(outage: Outage) {
   if (outage.resolved_at) {
     events.push({ label: 'Outage resolved', time: outage.resolved_at });
   }
+  for (const escalation of outage.severity_escalations ?? []) {
+    events.push({
+      label: `Severity escalated: ${escalation.previous_severity} → ${escalation.new_severity}`,
+      time: escalation.timestamp,
+      note: `Reason: ${escalation.reason}${escalation.actor ? ` · By ${escalation.actor}` : ''}`,
+    });
+  }
   return events.sort(
     (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime()
   );
@@ -104,6 +115,7 @@ export default function OutageDetailsPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const toast = useToast();
+  const { user } = useSession();
   const id = params?.id;
 
   const [outage, setOutage] = useState<Outage | null>(null);
@@ -113,6 +125,11 @@ export default function OutageDetailsPage() {
   const [isResolveModalOpen, setIsResolveModalOpen] = useState(false);
   const [resolutionPayment, setResolutionPayment] =
     useState<OutageResolutionPayment | null>(null);
+  const [showEscalationModal, setShowEscalationModal] = useState(false);
+  const [escalationSeverity, setEscalationSeverity] =
+    useState<Severity>('critical');
+  const [escalationReason, setEscalationReason] = useState('');
+  const [escalating, setEscalating] = useState(false);
 
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -225,6 +242,52 @@ export default function OutageDetailsPage() {
     }
   }
 
+  async function handleEscalate() {
+    if (!id || !outage) return;
+    const reason = escalationReason.trim();
+    if (!reason) {
+      setError('An escalation reason is required.');
+      return;
+    }
+
+    setEscalating(true);
+    setError(null);
+    try {
+      const response = await escalateOutage(id, {
+        severity: escalationSeverity,
+        reason,
+      });
+      const event = response.event ?? {
+        id: `${id}-${Date.now()}`,
+        previous_severity: outage.severity,
+        new_severity: escalationSeverity,
+        reason,
+        timestamp: new Date().toISOString(),
+        actor: user?.full_name ?? user?.email ?? user?.id ?? null,
+      };
+      setOutage({
+        ...response.outage,
+        severity: escalationSeverity,
+        severity_escalations: response.outage.severity_escalations ?? [
+          ...(outage.severity_escalations ?? []),
+          event,
+        ],
+      });
+      setShowEscalationModal(false);
+      setEscalationReason('');
+      toast('Outage severity escalated.', 'success');
+      announce(
+        `Outage #${id} severity escalated from ${outage.severity} to ${escalationSeverity}`
+      );
+    } catch (err) {
+      const message = getErrorMessage(err);
+      setError(message);
+      toast(message, 'error');
+    } finally {
+      setEscalating(false);
+    }
+  }
+
   async function handleDelete() {
     if (!id) return;
     setDeleting(true);
@@ -293,6 +356,25 @@ export default function OutageDetailsPage() {
         </div>
         <div className="flex items-center gap-2 no-print">
           <PrintButton />
+            <button
+              type="button"
+              onClick={() => {
+                const nextSeverity = getHigherSeverities(outage.severity)[0];
+                if (!nextSeverity) return;
+                setEscalationSeverity(nextSeverity);
+                setEscalationReason('');
+                setError(null);
+                setShowEscalationModal(true);
+              }}
+              disabled={
+                isResolved ||
+                getHigherSeverities(outage.severity).length === 0 ||
+                escalating
+              }
+              className="rounded-md border border-amber-300 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Escalate Severity
+            </button>
           {!editing && (
             <button
               onClick={startEdit}
@@ -402,7 +484,10 @@ export default function OutageDetailsPage() {
                   className="w-full rounded-md border border-slate-200 px-3 py-2"
                   value={editForm.assigned_to ?? ''}
                   onChange={(e) =>
-                    setEditForm((f) => ({ ...f, assigned_to: e.target.value }))
+                      setEditForm((f) => ({
+                        ...f,
+                        assigned_to: e.target.value,
+                      }))
                   }
                 />
               </div>
@@ -783,6 +868,92 @@ export default function OutageDetailsPage() {
         }}
         onConfirmResolve={(mttr) => handleResolve(mttr)}
       />
+
+        {showEscalationModal ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="escalate-severity-title"
+          >
+            <div className="w-full max-w-md space-y-4 rounded-xl bg-white p-6 shadow-xl">
+              <div>
+                <h2
+                  id="escalate-severity-title"
+                  className="text-lg font-semibold text-slate-900"
+                >
+                  Escalate outage severity
+                </h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Choose a higher severity and record why this outage needs
+                  escalation.
+                </p>
+              </div>
+              <div>
+                <label
+                  htmlFor="escalation-severity"
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                >
+                  New severity
+                </label>
+                <select
+                  id="escalation-severity"
+                  value={escalationSeverity}
+                  onChange={(event) =>
+                    setEscalationSeverity(event.target.value as Severity)
+                  }
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                >
+                  {getHigherSeverities(outage.severity).map((severity) => (
+                    <option key={severity} value={severity}>
+                      {severity[0].toUpperCase() + severity.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label
+                  htmlFor="escalation-reason"
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                >
+                  Escalation reason
+                </label>
+                <TextArea
+                  id="escalation-reason"
+                  value={escalationReason}
+                  onChange={(event) => setEscalationReason(event.target.value)}
+                  maxLength={500}
+                  rows={4}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="Describe what has worsened or why priority must increase."
+                />
+              </div>
+              {error ? (
+                <p role="alert" className="text-sm text-red-600">
+                  {error}
+                </p>
+              ) : null}
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEscalationModal(false)}
+                  disabled={escalating}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleEscalate()}
+                  disabled={escalating || !escalationReason.trim()}
+                  className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {escalating ? 'Escalating…' : 'Confirm Escalation'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
       {showDeleteConfirm && (
         <div

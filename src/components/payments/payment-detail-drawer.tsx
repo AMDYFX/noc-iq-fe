@@ -8,7 +8,15 @@ import { useToast } from '@/components/ui/toast';
 import { PaymentService } from '@/services/paymentService';
 import type { PaginatedPayments, Payment } from '@/types/payment';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink, MoreVertical, RefreshCcw, Scale, ShieldAlert, X } from 'lucide-react';
+import {
+  Copy,
+  ExternalLink,
+  MoreVertical,
+  RefreshCcw,
+  Scale,
+  ShieldAlert,
+  X,
+} from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -88,6 +96,7 @@ export function PaymentDetailDrawer({
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const [actionNote, setActionNote] = useState('');
   const [showFullHistory, setShowFullHistory] = useState(false);
+  const [showRetryConfirm, setShowRetryConfirm] = useState(false);
   const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [maxFeeMultiplier, setMaxFeeMultiplier] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
@@ -252,7 +261,9 @@ export function PaymentDetailDrawer({
   const submitOverride = () => {
     const multiplier = Number(maxFeeMultiplier);
     if (!Number.isFinite(multiplier) || multiplier <= 0) {
-      setOverrideError('Enter a valid custom max fee multiplier greater than 0.');
+      setOverrideError(
+        'Enter a valid custom max fee multiplier greater than 0.'
+      );
       return;
     }
     if (!adminPassword.trim()) {
@@ -262,6 +273,22 @@ export function PaymentDetailDrawer({
     setOverrideError(null);
     overrideMutation.mutate();
   };
+
+  async function copyIdempotencyKey() {
+    const key = payment?.idempotencyKey;
+    if (!key) return;
+    try {
+      await navigator.clipboard.writeText(key);
+      toast('Idempotency key copied.', 'success');
+    } catch (error) {
+      toast(
+        error instanceof Error
+          ? `Could not copy idempotency key: ${error.message}`
+          : 'Could not copy idempotency key.',
+        'error'
+      );
+    }
+  }
 
   return (
     <TooltipProvider>
@@ -307,7 +334,9 @@ export function PaymentDetailDrawer({
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                   Payment ID
                 </p>
-                <p className="font-mono text-sm text-slate-800">{payment.id}</p>
+                  <p className="font-mono text-sm text-slate-800">
+                    {payment.id}
+                  </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Tooltip>
@@ -360,6 +389,52 @@ export function PaymentDetailDrawer({
             </div>
           </div>
 
+            <div className="rounded-lg border border-slate-200 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm text-gray-500">Idempotency Key</p>
+                  <p className="break-all font-mono text-sm">
+                    {payment.idempotencyKey ?? 'Unavailable'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {payment.idempotencyKey ? (
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                        payment.idempotencyStatus === 'duplicate_prevented'
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-emerald-100 text-emerald-800'
+                      }`}
+                    >
+                      {payment.idempotencyStatus === 'duplicate_prevented'
+                        ? 'Duplicate Prevented'
+                        : 'Unique'}
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => void copyIdempotencyKey()}
+                    disabled={!payment.idempotencyKey}
+                    className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    Copy Idempotency Key
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {payment.failureReason ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-red-700">
+                  Failure reason
+                </p>
+                <p className="mt-1 text-sm text-red-800">
+                  {payment.failureReason}
+                </p>
+              </div>
+            ) : null}
+
           <div className="border-t pt-4">
             <p className="text-sm text-gray-500">Client Wallet</p>
             {(() => {
@@ -367,7 +442,9 @@ export function PaymentDetailDrawer({
               const link = explorerLink('account', addr);
               if (!addr)
                 return (
-                  <p className="font-mono text-sm text-gray-400">Unavailable</p>
+                    <p className="font-mono text-sm text-gray-400">
+                      Unavailable
+                    </p>
                 );
               return link ? (
                 <a
@@ -391,7 +468,9 @@ export function PaymentDetailDrawer({
               const link = explorerLink('account', addr);
               if (!addr)
                 return (
-                  <p className="font-mono text-sm text-gray-400">Unavailable</p>
+                    <p className="font-mono text-sm text-gray-400">
+                      Unavailable
+                    </p>
                 );
               return link ? (
                 <a
@@ -470,7 +549,7 @@ export function PaymentDetailDrawer({
                   <DropdownMenuContent align="end" className="w-56">
                     {canRetry ? (
                       <DropdownMenuItem
-                        onSelect={() => retryMutation.mutate()}
+                          onSelect={() => setShowRetryConfirm(true)}
                         disabled={
                           retryMutation.isPending ||
                           reconcileMutation.isPending ||
@@ -519,7 +598,7 @@ export function PaymentDetailDrawer({
                 {canRetry ? (
                   <button
                     type="button"
-                    onClick={() => retryMutation.mutate()}
+                      onClick={() => setShowRetryConfirm(true)}
                     disabled={
                       retryMutation.isPending ||
                       reconcileMutation.isPending ||
@@ -528,7 +607,9 @@ export function PaymentDetailDrawer({
                     className="inline-flex flex-1 items-center justify-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
                   >
                     <RefreshCcw className="h-4 w-4" />
-                    {retryMutation.isPending ? 'Retrying...' : 'Retry Payment'}
+                      {retryMutation.isPending
+                        ? 'Retrying...'
+                        : 'Retry Payment'}
                   </button>
                 ) : null}
                 {canReconcile ? (
@@ -552,10 +633,56 @@ export function PaymentDetailDrawer({
             </div>
           ) : (
             <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-              Manual retry, reconciliation, and administrative override controls
-              are unavailable for your role.
+                Manual retry, reconciliation, and administrative override
+                controls are unavailable for your role.
             </div>
           )}
+
+            {showRetryConfirm ? (
+              <div
+                className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="retry-payment-title"
+              >
+                <div className="w-full max-w-md space-y-4 rounded-xl bg-white p-5 shadow-xl">
+                  <div>
+                    <h3
+                      id="retry-payment-title"
+                      className="text-base font-semibold text-slate-900"
+                    >
+                      Retry payment?
+                    </h3>
+                    <p className="mt-1 text-sm text-slate-600">
+                      This will resubmit payment {payment.id}. Confirm that you
+                      want to retry this transaction.
+                    </p>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowRetryConfirm(false)}
+                      disabled={retryMutation.isPending}
+                      className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        retryMutation.mutate(undefined, {
+                          onSuccess: () => setShowRetryConfirm(false),
+                        })
+                      }
+                      disabled={retryMutation.isPending}
+                      className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {retryMutation.isPending ? 'Retrying…' : 'Confirm Retry'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
           {showOverrideModal ? (
             <div
@@ -578,7 +705,8 @@ export function PaymentDetailDrawer({
                     </h3>
                     <p className="text-sm text-slate-500">
                       Force-retry this payment with updated fee bounds. Admin
-                      password re-authentication is required before submission.
+                        password re-authentication is required before
+                        submission.
                     </p>
                   </div>
                 </div>

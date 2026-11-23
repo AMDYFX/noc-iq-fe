@@ -17,6 +17,10 @@ vi.mock('next/navigation', () => ({
   }),
 }));
 
+vi.mock('@/hooks/useSession', () => ({
+  useSession: () => ({ user: { id: 'operator-1' } }),
+}));
+
 function renderPage(data: ComponentProps<typeof OutagesPageClient>['data']) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
