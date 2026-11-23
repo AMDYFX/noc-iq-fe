@@ -1,19 +1,19 @@
 # Wave 5 Closure Dashboard
 
-> Last updated: 2026-11-22
+> Last updated: 2026-11-23
 
 ## Issue Completion
 
 | Metric | Value |
 |--------|-------|
-| Total Wave 5 issues | 100 |
+| Total Wave 5 issues | 101 |
 | Closed | 100 |
-| Open | 0 |
-| Completion | 100% |
+| Open | 1 |
+| Completion | 99% |
 
 ## Open Issues
 
-_All issues closed! 🎉_
+- [ ] #480 Payments: Add payment dead-letter queue (DLQ) retry action drawer
 
 ## Closed Issues
 
