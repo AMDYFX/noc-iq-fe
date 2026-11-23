@@ -11,6 +11,8 @@ export interface PaymentFilters {
   page_size?: number;
   status?: string;
   type?: string;
+  asset_code?: string;
+  to_address?: string;
   date_from?: string;
   date_to?: string;
   sort_by?: string;

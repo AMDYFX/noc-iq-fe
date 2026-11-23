@@ -34,6 +34,19 @@ import {
 import { queryKeys } from '@/lib/queryKeys';
 import { formatTotal, summarizePayments } from '@/lib/paymentTotals';
 import PaymentAssetBadge from '@/components/payments/PaymentAssetBadge';
+import { useWalletStore } from '@/store/walletStore';
+import { InlineValidationMessage } from '@/components/ui/InlineValidationMessage';
+import {
+  matchesWalletAddress,
+  validateWalletAddress,
+} from '@/lib/paymentAddressSearch';
+import { truncateAddress } from '@/lib/disbursements';
+import {
+  getPaymentLatencyMs,
+  PAYMENT_SLOW_THRESHOLD_MS,
+} from '@/lib/paymentLatency';
+import BatchSettlementSummaryCard from './BatchSettlementSummaryCard';
+import PaymentLatencyChart from '@/components/charts/PaymentLatencyChart';
 
 type SortDirection = 'asc' | 'desc';
 
@@ -73,6 +86,8 @@ function SortableHeader({
 const URL_DEFAULTS = {
   status: 'all',
   type: 'all',
+  assetCode: 'all',
+  walletAddress: '',
   dateFrom: '',
   dateTo: '',
   page: '1',
@@ -133,6 +148,10 @@ export function PaymentsView() {
 
   const statusFilter = urlState.status;
   const typeFilter = urlState.type;
+  const assetFilter = urlState.assetCode;
+  const walletAddress = urlState.walletAddress;
+  const walletError = validateWalletAddress(walletAddress);
+  const activeWalletAddress = walletError ? '' : walletAddress;
   const dateFrom = urlState.dateFrom;
   const dateTo = urlState.dateTo;
   const page = parseInt(urlState.page, 10);
@@ -140,6 +159,7 @@ export function PaymentsView() {
   const sortKey = urlState.sortKey;
   const sortDir = urlState.sortDir as SortDirection;
   const selectedPaymentId = urlState.paymentId || null;
+  const trackedTokens = useWalletStore((state) => state.trackedTokens);
 
   const dateError =
     dateFrom && dateTo && dateFrom > dateTo
@@ -149,6 +169,8 @@ export function PaymentsView() {
   const hasActiveFilters =
     statusFilter !== URL_DEFAULTS.status ||
     typeFilter !== URL_DEFAULTS.type ||
+    assetFilter !== URL_DEFAULTS.assetCode ||
+    walletAddress !== URL_DEFAULTS.walletAddress ||
     dateFrom !== URL_DEFAULTS.dateFrom ||
     dateTo !== URL_DEFAULTS.dateTo;
 
@@ -156,6 +178,8 @@ export function PaymentsView() {
     queryKey: queryKeys.payments.list({
       statusFilter,
       typeFilter,
+      assetFilter,
+      walletAddress,
       dateFrom,
       dateTo,
       page,
@@ -167,6 +191,8 @@ export function PaymentsView() {
       PaymentService.fetchPayments({
         status: statusFilter !== 'all' ? statusFilter : undefined,
         type: typeFilter !== 'all' ? typeFilter : undefined,
+        asset_code: assetFilter !== 'all' ? assetFilter : undefined,
+        to_address: activeWalletAddress || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         page,
@@ -178,11 +204,33 @@ export function PaymentsView() {
   });
 
   const payments = useMemo(() => data?.items ?? [], [data]);
+  const filteredPayments = useMemo(
+    () =>
+      activeWalletAddress
+        ? payments.filter((payment) =>
+            matchesWalletAddress(payment, activeWalletAddress)
+          )
+        : payments,
+    [payments, activeWalletAddress]
+  );
+  const assetOptions = useMemo(() => {
+    const codes = new Set<string>(['XLM', 'USDC']);
+    for (const payment of payments) {
+      if (payment.assetCode) codes.add(payment.assetCode);
+    }
+    for (const token of trackedTokens) {
+      if (token.symbol) codes.add(token.symbol);
+    }
+    return Array.from(codes).sort();
+  }, [payments, trackedTokens]);
   const total = data?.total ?? 0;
   const totalPages = Math.ceil(total / perPage);
 
   // #1005: totals for the rows currently on screen, shown in a sticky footer.
-  const totals = useMemo(() => summarizePayments(payments), [payments]);
+  const totals = useMemo(
+    () => summarizePayments(filteredPayments),
+    [filteredPayments]
+  );
 
   const handleFilterChange = (key: string, value: string) => {
     setUrlState({ [key]: value, page: '1' } as Partial<typeof URL_DEFAULTS>);
@@ -253,6 +301,21 @@ export function PaymentsView() {
               <option value="penalty">Penalty</option>
               <option value="manual">Manual</option>
             </select>
+            <select
+              value={assetFilter}
+              onChange={(e) => handleFilterChange('assetCode', e.target.value)}
+              className="rounded border px-3 py-1.5 text-sm"
+              aria-label="Filter by asset"
+            >
+              <option value="all">All Assets</option>
+              {assetOptions.map((code) => (
+                <option key={code} value={code}>
+                  {code === 'XLM' || code === 'USDC'
+                    ? code
+                    : `Custom SAC: ${code}`}
+                </option>
+              ))}
+            </select>
             <input
               type="date"
               value={dateFrom}
@@ -287,6 +350,9 @@ export function PaymentsView() {
         </div>
       </div>
 
+      <BatchSettlementSummaryCard payments={filteredPayments} />
+      <PaymentLatencyChart payments={filteredPayments} />
+
       <div className="overflow-x-auto rounded-lg border">
         <table className="w-full text-left text-sm">
           <thead className="border-b bg-gray-50 text-xs uppercase text-gray-500">
@@ -312,6 +378,31 @@ export function PaymentsView() {
                 activeDir={sortDir}
                 onSort={handleSort}
               />
+              <th className="px-4 py-3">
+                <label htmlFor="wallet-address-search" className="sr-only">
+                  Search wallet address
+                </label>
+                <input
+                  id="wallet-address-search"
+                  type="search"
+                  value={walletAddress}
+                  onChange={(e) =>
+                    handleFilterChange('walletAddress', e.target.value)
+                  }
+                  placeholder="Recipient G..."
+                  className="w-full rounded border px-2 py-1 text-xs font-normal normal-case text-gray-700"
+                  aria-label="Search wallet address"
+                  aria-invalid={!!walletError}
+                  aria-describedby={
+                    walletError ? 'wallet-address-search-error' : undefined
+                  }
+                />
+                <InlineValidationMessage
+                  id="wallet-address-search-error"
+                  message={walletError}
+                  testId="wallet-address-search-error"
+                />
+              </th>
               <th className="px-4 py-3">Type</th>
               <th className="px-4 py-3">Tx</th>
               <th className="px-4 py-3">Commission</th>
@@ -321,40 +412,27 @@ export function PaymentsView() {
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <tr key={i} className="border-b">
-                  <td colSpan={6} className="px-4 py-3">
+                  <td colSpan={7} className="px-4 py-3">
                     <div className="h-4 animate-pulse rounded bg-gray-200" />
                   </td>
                 </tr>
               ))
-            ) : payments.length === 0 ? (
+            ) : filteredPayments.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8">
+                <td colSpan={7} className="px-4 py-8">
                   <EmptyState
                     icon={Inbox}
                     title="No payments found"
                     description={
-                      statusFilter !== 'all' ||
-                      typeFilter !== 'all' ||
-                      dateFrom ||
-                      dateTo
+                      hasActiveFilters
                         ? 'Try adjusting your filters or clearing them to see all payments.'
                         : 'As soon as payments are processed, they will appear here.'
                     }
                     action={
-                      statusFilter !== 'all' ||
-                      typeFilter !== 'all' ||
-                      dateFrom ||
-                      dateTo
+                      hasActiveFilters
                         ? {
                             label: 'Clear Filters',
-                            onClick: () =>
-                              setUrlState({
-                                status: 'all',
-                                type: 'all',
-                                dateFrom: '',
-                                dateTo: '',
-                                page: '1',
-                              }),
+                            onClick: () => setUrlState(URL_DEFAULTS),
                           }
                         : undefined
                     }
@@ -362,7 +440,11 @@ export function PaymentsView() {
                 </td>
               </tr>
             ) : (
-              payments.map((payment: Payment) => (
+              filteredPayments.map((payment: Payment) => {
+                const latencyMs = getPaymentLatencyMs(payment);
+                const isSlow =
+                  latencyMs !== null && latencyMs > PAYMENT_SLOW_THRESHOLD_MS;
+                return (
                 <tr
                   key={payment.id}
                   className="cursor-pointer border-b hover:bg-gray-50"
@@ -378,7 +460,18 @@ export function PaymentsView() {
                   aria-label={`View payment ${payment.id}`}
                 >
                   <td className="px-4 py-3">
-                    {new Date(payment.createdAt).toLocaleDateString()}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span>{new Date(payment.createdAt).toLocaleDateString()}</span>
+                      {isSlow && (
+                        <span
+                          className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700"
+                          title={`Confirmed in ${latencyMs}ms`}
+                          data-testid="payment-latency-flag"
+                        >
+                          SLOW
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3 font-medium">
                     <div className="flex items-center gap-2">
@@ -402,6 +495,14 @@ export function PaymentsView() {
                       </TooltipContent>
                     </Tooltip>
                   </td>
+                  <td className="px-4 py-3">
+                    <span
+                      className="font-mono text-xs text-gray-600"
+                      title={payment.toAddress ?? undefined}
+                    >
+                      {truncateAddress(payment.toAddress)}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-gray-600">
                     {payment.type ?? 'N/A'}
                   </td>
@@ -419,11 +520,12 @@ export function PaymentsView() {
                       : 'N/A'}
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
           {/* #1005: sticky totals for the rows on screen. */}
-          {!isLoading && payments.length > 0 && (
+          {!isLoading && filteredPayments.length > 0 && (
             <tfoot className="sticky bottom-0 z-10 border-t-2 border-gray-200 bg-white text-sm font-semibold text-gray-700">
               <tr data-testid="payments-totals-row">
                 <td className="px-4 py-3">
@@ -435,6 +537,7 @@ export function PaymentsView() {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-gray-500">Total</td>
+                <td className="px-4 py-3 text-gray-500" aria-label="Recipient totals not applicable" />
                 <td className="px-4 py-3 text-gray-500">Rewards</td>
                 <td className="px-4 py-3">
                   <span className="text-red-700">
