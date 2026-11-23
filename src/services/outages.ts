@@ -8,6 +8,8 @@ import type {
   PaginatedOutages,
   ResolveOutagePayload,
   ResolveOutageResponse,
+  Severity,
+  OutageSeverityEscalation,
 } from '@/types/outages';
 
 interface GetOutagesParams {
@@ -23,6 +25,11 @@ interface GetOutagesParams {
 interface ApiErrorResponse {
   message?: string;
   errors?: Record<string, string[]>;
+}
+
+export interface EscalateOutageResponse {
+  outage: Outage;
+  event?: OutageSeverityEscalation;
 }
 
 const OUTAGES_ENDPOINT = '/outages';
@@ -167,6 +174,29 @@ export async function resolveOutage(
     return res.data;
   } catch (error) {
     handleApiError(error, 'Failed to resolve outage.');
+  }
+}
+
+export async function escalateOutage(
+  id: string,
+  payload: { severity: Severity; reason: string }
+): Promise<EscalateOutageResponse> {
+  try {
+    if (!id) {
+      throw new Error('Outage ID is required.');
+    }
+    if (!payload.reason.trim()) {
+      throw new Error('An escalation reason is required.');
+    }
+
+    const res = await api.post<Outage | EscalateOutageResponse>(
+      `${OUTAGES_ENDPOINT}/${id}/escalate`,
+      { severity: payload.severity, reason: payload.reason.trim() }
+    );
+    const response = res.data;
+    return 'outage' in response ? response : { outage: response };
+  } catch (error) {
+    handleApiError(error, 'Failed to escalate outage severity.');
   }
 }
 

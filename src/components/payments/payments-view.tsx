@@ -47,6 +47,7 @@ import {
 } from '@/lib/paymentLatency';
 import BatchSettlementSummaryCard from './BatchSettlementSummaryCard';
 import PaymentLatencyChart from '@/components/charts/PaymentLatencyChart';
+import { DeadLetterPaymentsPanel } from './dead-letter-payments-panel';
 
 type SortDirection = 'asc' | 'desc';
 
@@ -95,6 +96,7 @@ const URL_DEFAULTS = {
   paymentId: '',
   sortKey: 'created_at',
   sortDir: 'desc',
+  tab: 'payments',
 };
 
 function formatAmount(payment: Payment) {
@@ -159,6 +161,7 @@ export function PaymentsView() {
   const sortKey = urlState.sortKey;
   const sortDir = urlState.sortDir as SortDirection;
   const selectedPaymentId = urlState.paymentId || null;
+  const isDeadLetterTab = urlState.tab === 'dead-letter';
   const trackedTokens = useWalletStore((state) => state.trackedTokens);
 
   const dateError =
@@ -200,7 +203,7 @@ export function PaymentsView() {
         sort_by: sortKey,
         sort_dir: sortDir,
       }),
-    enabled: !dateError,
+    enabled: !dateError && !isDeadLetterTab,
   });
 
   const payments = useMemo(() => data?.items ?? [], [data]);
@@ -254,7 +257,7 @@ export function PaymentsView() {
     setUrlState({ sortKey: key, sortDir: newDir, page: '1' });
   };
 
-  if (error) {
+  if (error && !isDeadLetterTab) {
     return (
       <div className="flex items-center justify-center p-8">
         <p className="text-red-500">Payments unavailable. Please try again.</p>
@@ -275,6 +278,45 @@ export function PaymentsView() {
             {STELLAR_NETWORK_LABEL}
           </span>
         </div>
+        </div>
+        <div
+          role="tablist"
+          aria-label="Payment views"
+          className="flex gap-2 border-b border-slate-200"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!isDeadLetterTab}
+            onClick={() => setUrlState({ tab: 'payments' })}
+            className={`border-b-2 px-3 py-2 text-sm font-medium ${
+              isDeadLetterTab
+                ? 'border-transparent text-slate-500'
+                : 'border-blue-600 text-blue-700'
+            }`}
+          >
+            Payments
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={isDeadLetterTab}
+            onClick={() => setUrlState({ tab: 'dead-letter', page: '1' })}
+            className={`border-b-2 px-3 py-2 text-sm font-medium ${
+              isDeadLetterTab
+                ? 'border-blue-600 text-blue-700'
+                : 'border-transparent text-slate-500'
+            }`}
+          >
+            Dead Letter Payments
+          </button>
+        </div>
+        {isDeadLetterTab ? (
+          <DeadLetterPaymentsPanel
+            onSelectPayment={(paymentId) => setUrlState({ paymentId })}
+          />
+        ) : (
+          <>
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <select
@@ -303,7 +345,9 @@ export function PaymentsView() {
             </select>
             <select
               value={assetFilter}
-              onChange={(e) => handleFilterChange('assetCode', e.target.value)}
+                  onChange={(e) =>
+                    handleFilterChange('assetCode', e.target.value)
+                  }
               className="rounded border px-3 py-1.5 text-sm"
               aria-label="Filter by asset"
             >
@@ -319,7 +363,9 @@ export function PaymentsView() {
             <input
               type="date"
               value={dateFrom}
-              onChange={(e) => handleFilterChange('dateFrom', e.target.value)}
+                  onChange={(e) =>
+                    handleFilterChange('dateFrom', e.target.value)
+                  }
               className={`rounded border px-3 py-1.5 text-sm ${dateError ? 'border-red-500' : ''}`}
               aria-label="Date from"
               aria-invalid={!!dateError}
@@ -348,7 +394,6 @@ export function PaymentsView() {
             </p>
           )}
         </div>
-      </div>
 
       <BatchSettlementSummaryCard payments={filteredPayments} />
       <PaymentLatencyChart payments={filteredPayments} />
@@ -379,7 +424,10 @@ export function PaymentsView() {
                 onSort={handleSort}
               />
               <th className="px-4 py-3">
-                <label htmlFor="wallet-address-search" className="sr-only">
+                      <label
+                        htmlFor="wallet-address-search"
+                        className="sr-only"
+                      >
                   Search wallet address
                 </label>
                 <input
@@ -394,7 +442,9 @@ export function PaymentsView() {
                   aria-label="Search wallet address"
                   aria-invalid={!!walletError}
                   aria-describedby={
-                    walletError ? 'wallet-address-search-error' : undefined
+                          walletError
+                            ? 'wallet-address-search-error'
+                            : undefined
                   }
                 />
                 <InlineValidationMessage
@@ -443,7 +493,8 @@ export function PaymentsView() {
               filteredPayments.map((payment: Payment) => {
                 const latencyMs = getPaymentLatencyMs(payment);
                 const isSlow =
-                  latencyMs !== null && latencyMs > PAYMENT_SLOW_THRESHOLD_MS;
+                        latencyMs !== null &&
+                        latencyMs > PAYMENT_SLOW_THRESHOLD_MS;
                 return (
                 <tr
                   key={payment.id}
@@ -461,7 +512,11 @@ export function PaymentsView() {
                 >
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span>{new Date(payment.createdAt).toLocaleDateString()}</span>
+                              <span>
+                                {new Date(
+                                  payment.createdAt
+                                ).toLocaleDateString()}
+                              </span>
                       {isSlow && (
                         <span
                           className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700"
@@ -476,7 +531,9 @@ export function PaymentsView() {
                   <td className="px-4 py-3 font-medium">
                     <div className="flex items-center gap-2">
                       <span>{formatAmount(payment)}</span>
-                      <PaymentAssetBadge assetCode={payment.assetCode} />
+                              <PaymentAssetBadge
+                                assetCode={payment.assetCode}
+                              />
                     </div>
                   </td>
                   <td className="px-4 py-3">
@@ -537,7 +594,10 @@ export function PaymentsView() {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-gray-500">Total</td>
-                <td className="px-4 py-3 text-gray-500" aria-label="Recipient totals not applicable" />
+                      <td
+                        className="px-4 py-3 text-gray-500"
+                        aria-label="Recipient totals not applicable"
+                      />
                 <td className="px-4 py-3 text-gray-500">Rewards</td>
                 <td className="px-4 py-3">
                   <span className="text-red-700">
@@ -611,6 +671,8 @@ export function PaymentsView() {
           </Pagination>
         </div>
       )}
+          </>
+        )}
 
       {selectedPaymentId && (
         <PaymentDetailDrawer

@@ -1,5 +1,6 @@
 export type PaymentType = 'reward' | 'penalty' | 'manual' | string;
 export type PaymentStatus = string;
+export type IdempotencyStatus = 'unique' | 'duplicate_prevented';
 export type ReconciliationStatus =
   'pending' | 'matched' | 'mismatched' | 'manual_review' | string;
 
@@ -23,6 +24,9 @@ export interface Payment {
   artistWallet?: string | null;
   platformFeeUsdc?: string | null;
   reconciliationStatus?: ReconciliationStatus | null;
+  idempotencyKey?: string | null;
+  idempotencyStatus?: IdempotencyStatus | null;
+  failureReason?: string | null;
 }
 
 export interface PaginatedPayments {

@@ -48,8 +48,18 @@ export interface Outage {
   created_by?: string;
   location?: Location;
   sla_status?: SLAResult;
+  severity_escalations?: OutageSeverityEscalation[];
   root_cause?: string;
   resolution_notes?: string;
+}
+
+export interface OutageSeverityEscalation {
+  id: string;
+  previous_severity: Severity;
+  new_severity: Severity;
+  reason: string;
+  timestamp: string;
+  actor?: string | null;
 }
 
 export interface OutageCreate {

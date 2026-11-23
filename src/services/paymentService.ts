@@ -66,7 +66,31 @@ function toReconciliationStatus(value: unknown): ReconciliationStatus | null {
 
 export function normalizePayment(raw: unknown): Payment {
   const record = asRecord(raw);
+  const metadata = asRecord(record.metadata);
   const amountRaw = record.amount ?? record.amount_usdc ?? record.amountUsdc;
+  const idempotencyKey = asNullableString(
+    record.idempotency_key ??
+      record.idempotencyKey ??
+      metadata.idempotency_key ??
+      metadata.idempotencyKey
+  );
+  const rawIdempotencyStatus = asString(
+    record.idempotency_status ??
+      record.idempotencyStatus ??
+      record.deduplication_status ??
+      record.deduplicationStatus
+  ).toLowerCase();
+  const duplicatePrevented =
+    record.duplicate_prevented === true ||
+    record.duplicatePrevented === true ||
+    metadata.duplicate_prevented === true ||
+    rawIdempotencyStatus === 'duplicate_prevented' ||
+    rawIdempotencyStatus === 'duplicate-prevented';
+  const idempotencyStatus = idempotencyKey
+    ? duplicatePrevented
+      ? 'duplicate_prevented'
+      : 'unique'
+    : null;
 
   return {
     id: asString(record.id),
@@ -113,6 +137,18 @@ export function normalizePayment(raw: unknown): Payment {
     ),
     reconciliationStatus: toReconciliationStatus(
       record.reconciliation_status ?? record.reconciliationStatus
+    ),
+    idempotencyKey,
+    idempotencyStatus,
+    failureReason: asNullableString(
+      record.failure_reason ??
+        record.failureReason ??
+        record.error_reason ??
+        record.errorReason ??
+        record.error_message ??
+        record.errorMessage ??
+        metadata.failure_reason ??
+        metadata.error_reason
     ),
   };
 }

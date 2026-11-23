@@ -18,6 +18,10 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => currentSearchParams(),
 }));
 
+vi.mock('@/hooks/useSession', () => ({
+  useSession: () => ({ user: { id: 'operator-1' } }),
+}));
+
 const DATA = [
   {
     id: 'outage-1',
